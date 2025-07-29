@@ -1,181 +1,100 @@
 
-# 📦 Paperless-NGX Backup Strategy
+# Paperless-ngx Backup Strategy for Synology NAS
 
-A reliable backup strategy is essential to protect your valuable documents and configurations in your self-hosted **Paperless-ngx** instance. This guide outlines a proven setup tailored for running on a local machine and backing up to a **Synology NAS** using `rsync` over SSH.
+This repository contains scripts and instructions for a robust backup strategy for a self-hosted [Paperless-ngx](https://github.com/paperless-ngx/paperless-ngx) instance running via Docker Compose. The backups are stored on a Synology NAS.
 
----
+## Backup Strategy Overview
 
-## 🛠️ Overview
+The strategy backs up the three fundamental components of Paperless-ngx:
 
-This strategy includes three key components:
+1.  **Documents:** All original and archived files from the `media` directory.
+2.  **Database:** Metadata, tags, correspondents, etc., are backed up using the official exporter.
+3.  **Configuration:** The `docker-compose.yml` and `.env` files, which are necessary for operation.
 
-1. **Document Backup** (`media` folder)  
-2. **Database Backup**  
-3. **Configuration Backup**
+## Prerequisites
 
-All backups are pushed to a **Synology NAS** using `rsync`.
+* A running Paperless-ngx instance on a Linux system (e.g., Ubuntu).
+* The Paperless-ngx instance is managed with Docker Compose.
+* A Synology NAS on the same network.
+* `rsync` is installed on the Linux system (`sudo apt install rsync`).
 
----
+## Step 1: Setup on the Synology NAS
 
-## 🧱 1. Prerequisites
+1.  **Create a Shared Folder:**
+    * Go to **Control Panel > Shared Folder**.
+    * Create a new folder, e.g., `paperless_backup`.
 
-### 🖥️ On Your Ubuntu (or Linux) Host
+2.  **Create a Dedicated Backup User:**
+    * Go to **Control Panel > User & Group**.
+    * Create a new user, e.g., `backup_user`.
+    * Grant this user read/write permissions **only** for the `paperless_backup` folder.
 
-- Docker and Docker Compose installed  
-- Paperless-NGX running locally  
-- SSH access to your Synology NAS  
-- A backup script (detailed below)  
-- A `.env` file for environment configuration  
+3.  **Enable the rsync Service:**
+    * Go to **Control Panel > File Services > rsync**.
+    * Check the box for "Enable rsync service".
 
-### 📦 On Your Synology NAS
+## Step 2: Configuration on the Paperless Server
 
-1. **Create a Shared Folder**
-   - Go to **Control Panel > Shared Folder**
-   - Create a new folder (e.g., `paperless_backup`)
+1.  **Clone or Download the Repository:**
+    Download the files from this repository to a directory on your Paperless server, e.g., `/opt/paperless-backup`.
 
-2. **Create a Dedicated Backup User**
-   - Go to **Control Panel > User & Group**
-   - Create a user (e.g., `backup_user`)  
-   - Grant read/write access **only** to the shared folder
+    ```bash
+    git clone [URL-OF-YOUR-GITHUB-REPO] /opt/paperless-backup
+    cd /opt/paperless-backup
+    ```
 
-3. **Enable rsync Service**
-   - Go to **Control Panel > File Services > rsync**
-   - Enable **rsync service**
+2.  **Customize the Configuration File:**
+    * Copy the template `backup.env.template` to `backup.env`.
+    * Open the `backup.env` file with a text editor (e.g., `nano backup.env`).
+    * Enter all the required values for your environment (paths, NAS IP address, username). The comments in the file explain each variable.
 
----
+3.  **Make the Script Executable:**
+    Give the backup script the necessary execution permissions.
 
-## ⚙️ 2. Environment Configuration
+    ```bash
+    chmod +x backup_paperless.sh
+    ```
 
-Create a `.env` file in the same directory as your backup script:
+## Step 3: Run the Backup
 
-```env
-# .env - Configuration for the Paperless-NGX Backup Script
-
-# --- Local paths on your mini PC ---
-PAPERLESS_MEDIA_DIR="/path/to/your/paperless/media"
-PAPERLESS_COMPOSE_DIR="/path/to/your/docker-compose"
-TEMP_BACKUP_DIR="/tmp/paperless_backup_temp"
-
-# --- Synology NAS settings ---
-NAS_USER="backup_user"
-NAS_IP="IP_ADDRESS_OF_YOUR_NAS"
-NAS_BASE_DIR="/volume1/paperless_backup"
-```
-
----
-
-## 📄 3. The Backup Script
-
-Create a file `backup_paperless.sh` and make it executable:
+You can run the backup manually at any time to test your configuration.
 
 ```bash
-chmod +x backup_paperless.sh
+./backup_paperless.sh
 ```
 
-### Script: `backup_paperless.sh`
+ The script will now back up the three components (documents, database, configuration) to the corresponding subfolders on your Synology NAS.
+
+## Step 4: Automation with a Cronjob
+To run the backup regularly (e.g., daily at 2:00 AM), set up a cronjob.
+
+Open the crontab table:
 
 ```bash
-#!/bin/bash
 
-# ==================================================
-#          PAPERLESS-NGX BACKUP SCRIPT
-#      (loads configuration from .env)
-# ==================================================
-
-# Load environment variables
-SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &> /dev/null && pwd)
-source "${SCRIPT_DIR}/.env"
-
-# Validate required variables
-if [ -z "$PAPERLESS_MEDIA_DIR" ] || [ -z "$NAS_IP" ]; then
-    echo "Error: Required variables are not set in .env. Please check the file."
-    exit 1
-fi
-
-echo "=========================================="
-echo "Paperless-ngx backup started on $(date)"
-echo "=========================================="
-
-# --- 1. Backup Documents ---
-echo "--> [1/3] Backing up documents..."
-rsync -avz --delete "$PAPERLESS_MEDIA_DIR/" "$NAS_USER@$NAS_IP:$NAS_BASE_DIR/documents/"
-echo "    ...Documents successfully backed up."
-
-# --- 2. Backup Database ---
-echo "--> [2/3] Backing up database..."
-mkdir -p "$TEMP_BACKUP_DIR"
-cd "$PAPERLESS_COMPOSE_DIR" || exit 1
-docker compose exec -T webserver document_exporter ../data/ --zip
-EXPORT_FILE=$(find "$PAPERLESS_COMPOSE_DIR/data/" -name "*.zip")
-mv "$EXPORT_FILE" "$TEMP_BACKUP_DIR/paperless_export_$(date +%F).zip"
-rsync -avz --remove-source-files "$TEMP_BACKUP_DIR/" "$NAS_USER@$NAS_IP:$NAS_BASE_DIR/database/"
-echo "    ...Database successfully backed up."
-
-# --- 3. Backup Configuration ---
-echo "--> [3/3] Backing up configuration..."
-rsync -avz "$PAPERLESS_COMPOSE_DIR/" --include="docker-compose.yml" --include=".env" --exclude="*" "$NAS_USER@$NAS_IP:$NAS_BASE_DIR/config/"
-echo "    ...Configuration successfully backed up."
-
-echo "=========================================="
-echo "Backup completed successfully."
-echo "=========================================="
-```
-
----
-
-## 🔁 4. Automation with Cron
-
-To run the backup script automatically (e.g., daily at 2:00 AM):
-
-### Edit the Crontab
-
-```bash
 crontab -e
 ```
+Add the following line to the end of the file. Adjust the path to the script accordingly.
 
-### Add This Line
+Code-Snippet
 
 ```bash
-0 2 * * * /path/to/your/backup_paperless.sh > /var/log/paperless_backup.log 2>&1
+# Run the Paperless-ngx backup every day at 2:00 AM
+0 2 * * * /opt/paperless-backup/backup_paperless.sh > /var/log/paperless_backup.log 2>&1
 ```
+This redirects the script's output to a log file, which helps with troubleshooting.
 
-> This logs output to `/var/log/paperless_backup.log` and runs daily at 2 AM.
+## Restore Procedure
+A backup is only as good as its restorability. In an emergency, follow these steps:
 
----
+1. Restore the Configuration: Copy the `docker-compose.yml` and .env files from your NAS backup back to the new server.
 
-## ✅ Result
+2. Restore the Documents: Copy the contents of the documents folder from the NAS back into the media folder of your new Paperless instance.
 
-After setup:
+3. Import the Database:
 
-- Your **documents**, **database**, and **configuration** are backed up daily  
-- Data is stored safely on your **Synology NAS**  
-- Deleted files in `media/` are removed from the NAS (mirrored state)
+Start the empty Paperless instance with docker compose up -d.
 
----
+Copy the `paperless_export_...zip` from your NAS backup into the consume folder of your new instance.
 
-## 📌 Optional: Google Drive Upload (Advanced)
-
-You can extend the script to also upload backups to Google Drive using tools like:
-
-- [`rclone`](https://rclone.org/)
-- Google Drive API with automation
-
-Let me know if you'd like help automating that.
-
----
-
-## 📂 Folder Structure on NAS
-
-```
-/volume1/paperless_backup/
-├── documents/        # Synced media files
-├── database/         # Database dumps (zip)
-└── config/           # docker-compose.yml and .env
-```
-
----
-
-## 🧪 Test Your Backup
-
-- Manually run the script once to validate setup  
-- Occasionally restore test files to verify backup integrity  
+Paperless-ngx will detect the export file and automatically start the import process. Monitor the logs with docker compose logs -f.
